@@ -1,13 +1,12 @@
-# La gran videoteca del cine boliviano
+# La gran videoteca del cine boliviano — versión 1.1.0
 
-Complemento de catálogo para Stremio. No ofrece streams ni enlaces de reproducción.
+Complemento de catálogo para Stremio. No incluye enlaces de reproducción.
 
-## Publicar en Render
-- Subir el contenido de esta carpeta a un repositorio GitHub nuevo.
-- Crear un Web Service en Render.
-- Build command: `npm install`
-- Start command: `npm start`
-- Tras desplegar, comprobar `https://TU-SERVICIO.onrender.com/manifest.json`.
+## Mejoras
+- CORS para compatibilidad con clientes Stremio.
+- Búsqueda conservadora de identificadores IMDb por título y año.
+- Usa carátula encontrada cuando la coincidencia es muy alta y el año coincide.
+- Si no se encuentra una carátula fiable, muestra una lámina propia que indica que el cartel no está localizado, en vez de dejar un cuadro vacío o asignar una película equivocada.
+- Mantiene fichas propias para títulos que no se encuentran en IMDb.
 
-## Nota de calidad
-El archivo de trabajo tiene 300 registros. Para evitar fichas duplicadas en Stremio, el catálogo de publicación contiene títulos únicos. Hay algunos años alternativos pendientes de comprobación; se indican en `catalog.json`.
+Las búsquedas automáticas no garantizan una coincidencia para todos los títulos; el catálogo conserva los títulos sin coincidencia.
