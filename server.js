@@ -5,11 +5,15 @@ const nameToImdb = require('name-to-imdb');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
-const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, 'manifest.json'), 'utf8'));
-const films = JSON.parse(fs.readFileSync(path.join(__dirname, 'catalog.json'), 'utf8'));
-const cachePath = path.join(__dirname, 'enriched-cache.json');
+const root = __dirname;
+const manifest = JSON.parse(fs.readFileSync(path.join(root, 'manifest.json'), 'utf8'));
+const films = JSON.parse(fs.readFileSync(path.join(root, 'catalog.json'), 'utf8'));
+const byId = new Map(films.map(f => [f.id, f]));
+const cachePath = path.join(root, 'enriched-cache.json');
 let enriched = {};
 try { enriched = JSON.parse(fs.readFileSync(cachePath, 'utf8')); } catch (_) {}
+let lookupRunning = false;
+let lastLookupAt = 0;
 
 app.use((req, res, next) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -19,57 +23,48 @@ app.use((req, res, next) => {
   next();
 });
 
-const byId = new Map(films.map(f => [f.id, f]));
-const cleanText = value => String(value || '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
-
 function posterFor(f) {
-  const match = enriched[f.id];
-  if (match && match.poster) return match.poster;
-  // PNG fallback: Stremio's poster metadata expects PNG/JPEG, not SVG.
-  return 'https://cine-boliviano-stremio.onrender.com/placeholder.png';
+  const hit = enriched[f.id];
+  return hit && hit.poster ? hit.poster : 'https://cine-boliviano-stremio.onrender.com/placeholder.png';
 }
 function metaFor(f) {
-  const match = enriched[f.id];
-  const imdbId = match && match.imdbId;
   return {
-    id: f.id,
-    type: 'movie',
-    name: f.title,
-    releaseInfo: String(f.year),
-    poster: posterFor(f),
-    posterShape: 'poster',
+    id: f.id, type: 'movie', name: f.title, releaseInfo: String(f.year),
+    poster: posterFor(f), posterShape: 'poster',
     description: `${f.type || 'Cine'} · Dirección: ${f.director || 'Dato no disponible'}${f.notes ? '\n' + f.notes : ''}`,
     country: 'Bolivia'
+  };
+}
+function extrasFromRequest(req) {
+  // Stremio normally encodes extra args in the final path segment; accept query args too.
+  const segment = req.params[0] || '';
+  const parsed = new URLSearchParams(segment);
+  return {
+    search: String(req.query.search || parsed.get('search') || '').trim().toLocaleLowerCase('es'),
+    skip: Math.max(0, Number(req.query.skip || parsed.get('skip') || 0) || 0)
   };
 }
 
 app.get('/', (_req, res) => res.type('text').send('La gran videoteca del cine boliviano está activa.'));
 app.get('/manifest.json', (_req, res) => res.json(manifest));
-app.get('/placeholder.png', (_req, res) => res.sendFile(path.join(__dirname, 'placeholder.png')));
-
-// Stremio requests later pages as /catalog/movie/cine_boliviano/skip=100.json.
-// Keep each response at no more than 100 items, as required by the addon protocol.
+app.get('/placeholder.png', (_req, res) => res.sendFile(path.join(root, 'placeholder.png')));
+app.get('/health.json', (_req, res) => res.json({ total: films.length, identifiedPosters: Object.values(enriched).filter(x => x && x.poster).length, lookupRunning, version: manifest.version }));
 app.get(/^\/catalog\/movie\/cine_boliviano(?:\/([^/]+))?\.json$/, (req, res) => {
-  const extraSegment = req.params[0] || '';
-  const extra = new URLSearchParams(extraSegment);
-  const q = String(req.query.search || extra.get('search') || '').toLocaleLowerCase('es');
-  const skip = Math.max(0, Number(req.query.skip || extra.get('skip') || 0));
-  const filtered = films.filter(f =>
-    !q || f.title.toLocaleLowerCase('es').includes(q) || String(f.year).includes(q)
-  );
+  const { search, skip } = extrasFromRequest(req);
+  const filtered = films.filter(f => !search || f.title.toLocaleLowerCase('es').includes(search) || String(f.year).includes(search));
   const metas = filtered.slice(skip, skip + 100).map(metaFor);
   res.json({ metas });
 });
-
 app.get('/meta/movie/:id.json', (req, res) => {
   const f = byId.get(req.params.id);
   if (!f) return res.status(404).json({ error: 'No encontrado' });
   res.json({ meta: metaFor(f) });
 });
 
-// Match conservatively: only accept near-exact title matches with a close year.
 async function enrichOne(f) {
-  if (enriched[f.id]) return;
+  // Cache only verified positive matches. A failed lookup is NOT permanent:
+  // it will be retried on the next background pass/restart.
+  if (enriched[f.id] && enriched[f.id].poster) return;
   try {
     const result = await nameToImdb({ name: f.title, year: Number(f.year), type: 'movie', providers: ['imdbFind'] });
     const candidate = result && result.inf && result.inf.meta;
@@ -77,28 +72,40 @@ async function enrichOne(f) {
     const candidateYear = Number(candidate && candidate.year || 0);
     const yearOK = !candidateYear || Math.abs(candidateYear - Number(f.year)) <= 1;
     const imdbId = result && result.res;
-    if (imdbId && /^tt\d+$/.test(imdbId) && candidate && similarity >= 0.92 && yearOK) {
-      enriched[f.id] = { imdbId, poster: candidate.image && candidate.image.src || null, matchedTitle: candidate.name, year: candidateYear, similarity };
-    } else {
-      enriched[f.id] = { imdbId: null, poster: null };
+    const poster = candidate && candidate.image && candidate.image.src;
+    if (imdbId && /^tt\d+$/.test(imdbId) && poster && candidate && similarity >= 0.92 && yearOK) {
+      enriched[f.id] = { imdbId, poster, matchedTitle: candidate.name, year: candidateYear, similarity };
+      return true;
     }
-  } catch (_) {
-    enriched[f.id] = { imdbId: null, poster: null };
+  } catch (err) {
+    // Temporary provider/network errors are deliberately not cached.
   }
+  return false;
 }
-
+function savePositiveCache() {
+  try {
+    const positives = Object.fromEntries(Object.entries(enriched).filter(([,v]) => v && v.poster));
+    fs.writeFileSync(cachePath, JSON.stringify(positives, null, 2));
+  } catch (_) {}
+}
 async function enrichCatalog() {
-  for (let i = 0; i < films.length; i += 3) {
-    await Promise.all(films.slice(i, i + 3).map(enrichOne));
-    if (i % 30 === 0) {
-      try { fs.writeFileSync(cachePath, JSON.stringify(enriched, null, 2)); } catch (_) {}
+  if (lookupRunning || Date.now() - lastLookupAt < 30 * 60 * 1000) return;
+  lookupRunning = true; lastLookupAt = Date.now();
+  try {
+    let found = 0;
+    for (let i = 0; i < films.length; i += 3) {
+      const results = await Promise.all(films.slice(i, i + 3).map(enrichOne));
+      found += results.filter(Boolean).length;
+      if (i % 15 === 0) savePositiveCache();
+      // Gentle pacing for the public lookup provider.
+      await new Promise(resolve => setTimeout(resolve, 350));
     }
-  }
-  try { fs.writeFileSync(cachePath, JSON.stringify(enriched, null, 2)); } catch (_) {}
-  console.log(`Identificación terminada: ${Object.values(enriched).filter(x => x.imdbId).length} de ${films.length} coincidencias seguras.`);
+    savePositiveCache();
+    console.log(`Búsqueda terminada: ${Object.values(enriched).filter(x => x && x.poster).length} carteles verificados; ${found} nuevos en esta pasada.`);
+  } finally { lookupRunning = false; }
 }
 
 app.listen(PORT, () => {
-  console.log(`Addon activo en puerto ${PORT}`);
-  enrichCatalog().catch(err => console.error('Error en identificación de películas:', err.message));
+  console.log(`Addon ${manifest.version} activo; ${films.length} registros; páginas de 100.`);
+  enrichCatalog().catch(err => console.error('Error de identificación:', err.message));
 });
