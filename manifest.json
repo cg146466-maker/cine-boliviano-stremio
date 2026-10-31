@@ -1,6 +1,6 @@
 {
   "id": "community.cine.boliviano.catalog",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "name": "La gran videoteca del cine boliviano",
   "description": "Catálogo comunitario de cine relacionado con Bolivia. Recupera la identificación conservadora de carteles, mantiene identificadores bolivia: y pagina el catálogo en bloques de 100.",
   "resources": [
@@ -22,6 +22,11 @@
         },
         {
           "name": "skip",
+          "options": [
+            "0",
+            "100",
+            "200"
+          ],
           "isRequired": false
         }
       ]

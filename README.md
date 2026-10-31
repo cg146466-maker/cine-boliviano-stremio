@@ -7,3 +7,8 @@ Los resultados negativos de búsqueda ya no se guardan: si IMDb no responde o no
 Comprobación del servicio: `/health.json` muestra el total, carteles identificados y estado de búsqueda.
 
 No incluye enlaces de reproducción.
+
+
+## Versión 1.5.0
+- Declara explícitamente las opciones de paginación `skip`: 0, 100 y 200 para que Stremio solicite las tres páginas.
+- Conserva la lógica de identificación de carteles de la versión 1.4.0 y los 292 registros.
