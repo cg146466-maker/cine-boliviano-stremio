@@ -26,13 +26,13 @@ function posterFor(f) {
   const match = enriched[f.id];
   if (match && match.poster) return match.poster;
   // PNG fallback: Stremio's poster metadata expects PNG/JPEG, not SVG.
-  return '/placeholder.png';
+  return 'https://cine-boliviano-stremio.onrender.com/placeholder.png';
 }
 function metaFor(f) {
   const match = enriched[f.id];
   const imdbId = match && match.imdbId;
   return {
-    id: imdbId || f.id,
+    id: f.id,
     type: 'movie',
     name: f.title,
     releaseInfo: String(f.year),
